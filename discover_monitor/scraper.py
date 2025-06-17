@@ -72,8 +72,64 @@ class Article:
             'timestamp': datetime.now().isoformat()
         }
 
+def _parse_date(date_str: str) -> Optional[datetime]:
+    """Parsea una cadena de fecha a un objeto datetime.
+    
+    Args:
+        date_str: Cadena de fecha en varios formatos posibles
+        
+    Returns:
+        Objeto datetime o None si no se pudo parsear
+    """
+    if not date_str or not isinstance(date_str, str):
+        return None
+    
+    # Eliminar espacios en blanco al inicio y final
+    date_str = date_str.strip()
+    
+    # Lista de formatos de fecha comunes a probar
+    date_formats = [
+        "%Y-%m-%dT%H:%M:%S%z",  # ISO 8601 con timezone
+        "%Y-%m-%dT%H:%M:%S",    # ISO 8601 sin timezone
+        "%Y-%m-%d %H:%M:%S",    # Formato SQL
+        "%Y-%m-%d",             # Solo fecha
+        "%d/%m/%Y %H:%M:%S",    # Formato europeo con tiempo
+        "%d/%m/%Y",             # Formato europeo sin tiempo
+        "%m/%d/%Y %H:%M:%S",    # Formato americano con tiempo
+        "%m/%d/%Y",             # Formato americano sin tiempo
+        "%a, %d %b %Y %H:%M:%S %z",  # RFC 2822 con timezone
+        "%a, %d %b %Y %H:%M:%S",      # RFC 2822 sin timezone
+        "%a %b %d %H:%M:%S %Y",       # Formato de fecha de Unix
+    ]
+    
+    for fmt in date_formats:
+        try:
+            return datetime.strptime(date_str, fmt)
+        except ValueError:
+            continue
+    
+    # Intentar con dateutil.parser si está disponible
+    try:
+        from dateutil import parser
+        return parser.parse(date_str)
+    except (ImportError, ValueError):
+        pass
+    
+    logger.warning(f"No se pudo parsear la fecha: {date_str}")
+    return None
+
 class DiscoverMonitor:
-    def __init__(self):
+    def __init__(self, output_file: str = None, max_workers: int = 5):
+        """Inicializa el monitor de Discover.
+        
+        Args:
+            output_file: Ruta al archivo de salida para guardar los artículos.
+            max_workers: Número máximo de workers para el ThreadPoolExecutor.
+        """
+        self.output_file = output_file or os.path.join(DATA_DIR, 'articles.csv')
+        self.max_workers = max_workers
+        self.articles = []  # Lista para almacenar los artículos encontrados
+        self.processed_urls = set()  # Conjunto para URLs ya procesadas
         self.session = requests.Session()
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
@@ -81,8 +137,161 @@ class DiscoverMonitor:
         self.setup_directories()
 
     def setup_directories(self):
-        """Create necessary directories if they don't exist."""
+        """Crea los directorios necesarios si no existen."""
         os.makedirs(DATA_DIR, exist_ok=True)
+        
+    def _save_articles(self, file_path: str = None) -> None:
+        """Guarda los artículos en un archivo CSV.
+        
+        Args:
+            file_path: Ruta del archivo donde guardar los artículos. Si es None, se usa self.output_file.
+        """
+        if not file_path:
+            file_path = self.output_file
+            
+        if not self.articles:
+            logger.warning("No hay artículos para guardar")
+            return
+            
+        try:
+            # Convertir los artículos a diccionarios
+            articles_data = [article.to_dict() for article in self.articles]
+            
+            # Crear DataFrame y guardar en CSV
+            df = pd.DataFrame(articles_data)
+            
+            # Asegurarse de que el directorio existe
+            os.makedirs(os.path.dirname(os.path.abspath(file_path)), exist_ok=True)
+            
+            # Guardar el archivo
+            df.to_csv(file_path, index=False, encoding='utf-8')
+            logger.info(f"Artículos guardados en {file_path}")
+            
+        except Exception as e:
+            logger.error(f"Error al guardar los artículos: {str(e)}")
+            raise
+        
+    def _fetch_sitemap(self, url: str) -> Optional[str]:
+        """Descarga el contenido de un sitemap.
+        
+        Args:
+            url: URL del sitemap a descargar
+            
+        Returns:
+            Contenido del sitemap como string o None si hay un error
+        """
+        try:
+            logger.info(f"Descargando sitemap: {url}")
+            response = self.session.get(url, timeout=REQUEST_TIMEOUT)
+            response.raise_for_status()
+            return response.text
+        except requests.RequestException as e:
+            logger.error(f"Error al descargar el sitemap {url}: {str(e)}")
+            return None
+            
+    def _parse_article_from_url(self, url: str) -> Optional[Article]:
+        """Extrae metadatos de un artículo a partir de su URL.
+        
+        Args:
+            url: URL del artículo a analizar
+            
+        Returns:
+            Objeto Article con los metadatos extraídos o None si hay un error
+        """
+        try:
+            logger.info(f"Analizando artículo: {url}")
+            response = self.session.get(url, timeout=REQUEST_TIMEOUT)
+            response.raise_for_status()
+            
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            # Extraer título (usando varios selectores comunes)
+            title = None
+            title_selectors = [
+                'h1',
+                'h1.article-title',
+                'h1.entry-title',
+                'h1.post-title',
+                'title',
+                'meta[property="og:title"]',
+                'meta[name="title"]'
+            ]
+            
+            for selector in title_selectors:
+                element = soup.select_one(selector)
+                if element and element.get_text().strip():
+                    title = element.get_text().strip()
+                    if selector.startswith('meta'):
+                        title = element.get('content', '').strip()
+                    if title:
+                        break
+            
+            # Extraer descripción
+            description = None
+            desc_selectors = [
+                'meta[property="og:description"]',
+                'meta[name="description"]',
+                'meta[itemprop="description"]',
+                'p.article-summary',
+                'div.article-content > p',
+                'div.entry-content > p'
+            ]
+            
+            for selector in desc_selectors:
+                element = soup.select_one(selector)
+                if element:
+                    if selector.startswith('meta'):
+                        description = element.get('content', '').strip()
+                    else:
+                        description = element.get_text().strip()
+                    if description:
+                        break
+            
+            # Extraer imagen
+            image_url = None
+            img_selectors = [
+                'meta[property="og:image"]',
+                'meta[name="twitter:image"]',
+                'img.article-image',
+                'img.wp-post-image',
+                'figure img',
+                'div.article-image img'
+            ]
+            
+            for selector in img_selectors:
+                element = soup.select_one(selector)
+                if element:
+                    if selector.startswith('meta'):
+                        image_url = element.get('content', '')
+                    else:
+                        image_url = element.get('src', '')
+                    if image_url:
+                        break
+            
+            # Extraer sección (de la URL o de la navegación)
+            section = 'General'
+            try:
+                # Intentar extraer de la URL
+                path_parts = urlparse(url).path.strip('/').split('/')
+                if len(path_parts) > 1 and path_parts[0]:
+                    section = path_parts[0].capitalize()
+            except Exception as e:
+                logger.warning(f"No se pudo extraer la sección de la URL {url}: {str(e)}")
+            
+            # Crear y devolver el artículo
+            return Article(
+                url=url,
+                title=title or 'Sin título',
+                section=section,
+                description=description or '',
+                source=urlparse(url).netloc,
+                is_own_site=False,
+                image_url=image_url
+            )
+            
+        except Exception as e:
+            logger.error(f"Error al analizar el artículo {url}: {str(e)}")
+            return None
 
     def _parse_sitemap_index(self, xml_content: str) -> List[str]:
         """Parsea un índice de sitemap y devuelve las URLs de los sitemaps."""
