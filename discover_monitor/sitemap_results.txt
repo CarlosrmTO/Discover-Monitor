@@ -1,0 +1,16 @@
+=== Resultados de búsqueda de sitemaps ===
+
+https://theobjective.com: https://theobjective.com/sitemap_index.xml
+https://www.elmundo.es: https://www.elmundo.es/sitemaps/sitemap.xml
+https://www.elconfidencial.com: https://www.elconfidencial.com/sitemap_index.xml
+https://www.infobae.com/espana/: https://www.infobae.com/arc/outboundfeeds/sitemap2/
+https://www.libertaddigital.com: https://www.libertaddigital.com/sitemap.xml
+https://www.vozpopuli.com: https://www.vozpopuli.com/sitemaps/sitemap-news2.xml
+https://www.publico.es: https://www.publico.es/sitemap-index.xml
+https://okdiario.com: https://okdiario.com/sitemap_index.xml
+https://www.eldiario.es: https://www.eldiario.es/sitemap_index_25b87.xml
+https://www.larazon.es: https://www.larazon.es/sitemaps/news.xml
+https://www.20minutos.es: https://www.20minutos.es/sitemap-index.xml
+https://www.abc.es: https://www.abc.es/sitemap.xml
+https://www.elespanol.com: https://www.elespanol.com/sitemap_index.xml
+https://www.elperiodico.com: https://www.elperiodico.com/es/google-news.xml
