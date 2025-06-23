@@ -47,6 +47,19 @@ credentials.json
 *.pem
 *.key
 
+# Test and coverage
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+coverage/
+
 # OS generated files
 .DS_Store
 .DS_Store?

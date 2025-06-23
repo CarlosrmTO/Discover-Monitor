@@ -7,8 +7,8 @@ This script monitors multiple news websites for new articles and tracks their ap
 import os
 import sys
 import argparse
-from scraper import DiscoverMonitor
-from config import WEBSITES, GSC_CREDENTIALS_FILE
+from discover_monitor.scraper import DiscoverMonitor
+from discover_monitor.config import WEBSITES, GSC_CREDENTIALS_FILE
 
 def check_requirements():
     """Check if all required files and configurations are present."""

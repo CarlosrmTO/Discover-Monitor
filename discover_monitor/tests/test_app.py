@@ -7,11 +7,8 @@ from unittest.mock import patch, MagicMock, mock_open
 from pathlib import Path
 import streamlit as st
 
-# Add the parent directory to the path so we can import app
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-# Import the app module after setting up the path
-import app
+# Import the app module using the full module path
+from discover_monitor import app
 
 # Sample test data
 TEST_DATA = pd.DataFrame({
@@ -26,7 +23,7 @@ TEST_DATA = pd.DataFrame({
 @pytest.fixture
 def setup_test_environment():
     # Create a mock for the load_data function
-    with patch('app.load_data') as mock_load_data:
+    with patch('discover_monitor.app.load_data') as mock_load_data:
         # Set up the mock to return test data by default
         mock_load_data.return_value = TEST_DATA.copy()
         
@@ -99,7 +96,7 @@ def setup_test_environment():
 
 
 @patch('pandas.read_csv')
-@patch('app.DATA_DIR')
+@patch('discover_monitor.app.DATA_DIR')
 def test_load_data_success(mock_data_dir, mock_read_csv):
     """Test that load_data loads data correctly from CSV."""
     # Arrange
@@ -135,7 +132,7 @@ def test_load_data_success(mock_data_dir, mock_read_csv):
     mock_read_csv.assert_called_once_with(mock_file, parse_dates=['published_date'])
 
 @patch('pandas.read_csv')
-@patch('app.DATA_DIR')
+@patch('discover_monitor.app.DATA_DIR')
 def test_load_data_file_not_found(mock_data_dir, mock_read_csv):
     """Test that load_data handles file not found scenario."""
     # Arrange
@@ -171,7 +168,7 @@ def test_load_data_file_not_found(mock_data_dir, mock_read_csv):
     # and is not part of the function's direct behavior that we're testing
 
 @patch('pandas.read_csv')
-@patch('app.DATA_DIR')
+@patch('discover_monitor.app.DATA_DIR')
 def test_load_data_exception_handling(mock_data_dir, mock_read_csv):
     """Test that load_data handles exceptions when reading the CSV file."""
     # Arrange
@@ -187,7 +184,7 @@ def test_load_data_exception_handling(mock_data_dir, mock_read_csv):
     mock_read_csv.side_effect = test_exception
     
     # Mock the logger to verify the error is logged
-    with patch('app.logger') as mock_logger:
+    with patch('discover_monitor.app.logger') as mock_logger:
         # Act
         result = app.load_data()
         
@@ -319,7 +316,7 @@ def test_generate_section_chart():
     assert 'yaxis' in fig.layout
 
 
-@patch('app.FPDF')
+@patch('discover_monitor.app.FPDF')
 def test_generate_pdf_report(mock_fpdf, setup_test_environment, tmp_path):
     """Test that generate_pdf_report creates a PDF file."""
     # Arrange
@@ -372,7 +369,7 @@ def test_main_flow_with_data(setup_test_environment):
     assert not cached_result.empty
 
 
-@patch('app.st.warning')
+@patch('discover_monitor.app.st.warning')
 def test_main_flow_no_data(mock_warning, setup_test_environment):
     """Test the main application flow when no data is available."""
     # Arrange
@@ -402,11 +399,11 @@ def test_main_flow_no_data(mock_warning, setup_test_environment):
     assert 'No hay datos que coincidan con los filtros seleccionados' in args[0]
 
 
-@patch('app.os.unlink')
+@patch('discover_monitor.app.os.unlink')
 @patch('builtins.open', new_callable=mock_open)
-@patch('app.st.selectbox')
-@patch('app.st.success')
-@patch('app.st.sidebar')
+@patch('discover_monitor.app.st.selectbox')
+@patch('discover_monitor.app.st.success')
+@patch('discover_monitor.app.st.sidebar')
 def test_export_functions(mock_sidebar, mock_success, mock_selectbox, mock_file_open, mock_unlink, setup_test_environment, tmp_path):
     """Test the export functionality."""
     # Setup test data
@@ -476,7 +473,7 @@ def test_export_functions(mock_sidebar, mock_success, mock_selectbox, mock_file_
             mock_success.assert_called_with("Datos exportados a Excel exitosamente")
         
         # Test PDF export
-        with patch('app.generate_pdf_report') as mock_generate_pdf:
+        with patch('discover_monitor.app.generate_pdf_report') as mock_generate_pdf:
             # Mock the button to return True only for PDF button
             mock_sidebar.button.side_effect = lambda label, **kwargs: label == "Generar Informe PDF"
             
@@ -511,7 +508,7 @@ def test_setup_sidebar_filters():
     })
     
     # Mock st.sidebar methods
-    with patch('app.st.sidebar') as mock_sidebar:
+    with patch('discover_monitor.app.st.sidebar') as mock_sidebar:
         # Configure the mock
         mock_sidebar.selectbox.return_value = 'Source A'
         mock_sidebar.date_input.return_value = (

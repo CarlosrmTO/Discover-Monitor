@@ -1,3 +1,14 @@
+from datetime import datetime
+
+def get_elpais_sitemap():
+    """Generate the El País sitemap URL for the current month and year.
+    
+    Returns:
+        str: Formatted sitemap URL for the current month and year.
+    """
+    now = datetime.now()
+    return f"https://elpais.com/sitemaps/{now.year}/{now.month:02d}/sitemap.xml"
+
 # List of websites to monitor with verified sitemaps
 WEBSITES = [
     {
@@ -47,6 +58,13 @@ WEBSITES = [
         'url': 'https://okdiario.com',
         'sitemap': 'https://okdiario.com/sitemap_index.xml',
         'is_own_site': False
+    },
+    {
+        'name': 'El País',
+        'url': 'https://elpais.com',
+        'sitemap': get_elpais_sitemap(),
+        'is_own_site': False,
+        'dynamic_sitemap': True
     },
     {
         'name': 'eldiario.es',

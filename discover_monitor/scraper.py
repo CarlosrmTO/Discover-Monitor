@@ -700,19 +700,77 @@ class DiscoverMonitor:
             return None
 
     def load_existing_data(self) -> pd.DataFrame:
-        """Load existing articles data from CSV if it exists."""
-        if os.path.exists(ARTICLES_FILE):
-            return pd.read_csv(ARTICLES_FILE)
-        return pd.DataFrame()
+        """Load existing articles data from CSV if it exists.
+        
+        Returns:
+            pd.DataFrame: DataFrame containing existing articles, or empty DataFrame if file doesn't exist or is corrupted.
+        """
+        if not os.path.exists(self.output_file):
+            return pd.DataFrame()
+            
+        try:
+            return pd.read_csv(self.output_file)
+        except pd.errors.EmptyDataError as e:
+            logger.error(f"Error loading {self.output_file}: {str(e)}")
+            return pd.DataFrame()
+        except Exception as e:
+            logger.error(f"Unexpected error loading {self.output_file}: {str(e)}")
+            return pd.DataFrame()
 
-    def save_articles(self, articles: List[Dict]):
-        """Save articles to CSV, appending to existing data."""
-        df = pd.DataFrame(articles)
-        if not df.empty:
-            if os.path.exists(ARTICLES_FILE):
-                existing_df = pd.read_csv(ARTICLES_FILE)
-                df = pd.concat([existing_df, df]).drop_duplicates(subset=['url'], keep='first')
-            df.to_csv(ARTICLES_FILE, index=False)
+    def save_articles(self, articles):
+        """Save articles to CSV, appending to existing data.
+        
+        Args:
+            articles: List of Article objects or dictionaries to save
+        """
+        if not articles:
+            return
+            
+        # Convert Article objects to dictionaries if needed
+        if isinstance(articles[0], Article):
+            articles = [article.to_dict() for article in articles]
+            
+        # Convert list of dicts to DataFrame
+        new_df = pd.DataFrame(articles)
+        
+        # Ensure required columns exist
+        required_columns = ['url', 'title', 'section', 'description', 'source', 
+                          'is_own_site', 'published_date', 'last_modified', 'image_url']
+        
+        # Add missing columns with None if they don't exist
+        for col in required_columns:
+            if col not in new_df.columns:
+                new_df[col] = None
+        
+        # If output file exists, load existing data and merge
+        if os.path.exists(self.output_file):
+            try:
+                existing_df = pd.read_csv(self.output_file)
+                
+                # Ensure existing data has all required columns
+                for col in required_columns:
+                    if col not in existing_df.columns:
+                        existing_df[col] = None
+                
+                # Concatenate and drop duplicates, keeping the first occurrence (existing data)
+                combined_df = pd.concat([existing_df, new_df])
+                combined_df = combined_df.drop_duplicates(subset=['url'], keep='first')
+            except Exception as e:
+                logger.error(f"Error loading existing articles: {str(e)}")
+                combined_df = new_df
+        else:
+            combined_df = new_df
+        
+        # Create data directory if it doesn't exist
+        os.makedirs(os.path.dirname(self.output_file), exist_ok=True)
+        
+        # Save to CSV
+        try:
+            combined_df.to_csv(self.output_file, index=False)
+            logger.info(f"Saved {len(articles)} articles to {self.output_file}")
+        except Exception as e:
+            logger.error(f"Error saving articles to {self.output_file}: {str(e)}")
+            raise
 
     def monitor_websites(self, max_articles_per_site: int = 50) -> None:
         """

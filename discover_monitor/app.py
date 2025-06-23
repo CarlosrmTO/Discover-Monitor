@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from fpdf import FPDF
 import tempfile
 import base64
+from io import BytesIO
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
 
@@ -115,6 +116,9 @@ def generate_pdf_report(df: pd.DataFrame, output_path: str) -> None:
         logger.warning("No hay datos para generar el informe PDF")
         return
         
+    if not output_path:
+        raise ValueError("La ruta de salida no puede estar vacía")
+        
     try:
         pdf = FPDF()
         pdf.add_page()
@@ -135,8 +139,13 @@ def generate_pdf_report(df: pd.DataFrame, output_path: str) -> None:
         pdf.cell(200, 10, txt="Estadísticas:", ln=True)
         pdf.set_font("Arial", size=10)
         pdf.cell(200, 10, txt=f"Total de artículos: {len(df)}", ln=True)
-        pdf.cell(200, 10, txt=f"Fuentes únicas: {df['source'].nunique() if not df.empty else 0}", ln=True)
-        pdf.cell(200, 10, txt=f"Secciones únicas: {df['section'].nunique() if not df.empty else 0}", ln=True)
+        
+        # Verificar si las columnas existen antes de acceder a ellas
+        has_source = 'source' in df.columns
+        has_section = 'section' in df.columns
+        
+        pdf.cell(200, 10, txt=f"Fuentes únicas: {df['source'].nunique() if has_source else 0}", ln=True)
+        pdf.cell(200, 10, txt=f"Secciones únicas: {df['section'].nunique() if has_section else 0}", ln=True)
         pdf.ln(10)
         
         # Tabla de artículos (solo las primeras 50 filas para no hacer el PDF demasiado grande)
@@ -166,7 +175,10 @@ def generate_pdf_report(df: pd.DataFrame, output_path: str) -> None:
         logger.info(f"Informe PDF generado en {output_path}")
         
     except Exception as e:
-        logger.error(f"Error al generar el informe PDF: {e}")
+        error_msg = f"Error al generar el informe PDF: {e}"
+        logger.error(error_msg, exc_info=True)
+        if 'st' in globals() and hasattr(st, 'error'):
+            st.error(error_msg)
         raise
 
 def setup_sidebar_filters(df: pd.DataFrame) -> Dict[str, Any]:
@@ -302,121 +314,150 @@ def export_data(filtered_df: pd.DataFrame) -> None:
     Args:
         filtered_df: DataFrame con los datos a exportar
     """
-    if not filtered_df.empty:
-        st.sidebar.markdown("---")
-        st.sidebar.subheader("Exportar datos")
+    if filtered_df.empty:
+        st.sidebar.warning("No hay datos para exportar")
+        return
         
-        # Exportar a CSV
-        if st.sidebar.button("Exportar a CSV"):
-            try:
-                with tempfile.NamedTemporaryFile(delete=False, suffix='.csv') as tmp_file:
-                    filtered_df.to_csv(tmp_file.name, index=False)
-                    with open(tmp_file.name, 'rb') as f:
-                        st.sidebar.download_button(
-                            label="Descargar CSV",
-                            data=f,
-                            file_name="articulos_discover.csv",
-                            mime="text/csv"
-                        )
-                st.success("Datos exportados a CSV exitosamente")
-            except Exception as e:
-                st.error(f"Error al exportar a CSV: {str(e)}")
-            finally:
-                if os.path.exists(tmp_file.name):
-                    os.unlink(tmp_file.name)
-        
-        # Exportar a Excel
-        if st.sidebar.button("Exportar a Excel"):
-            try:
-                with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp_file:
-                    filtered_df.to_excel(tmp_file.name, index=False, engine='openpyxl')
-                    with open(tmp_file.name, 'rb') as f:
-                        st.sidebar.download_button(
-                            label="Descargar Excel",
-                            data=f,
-                            file_name="articulos_discover.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                        )
-                st.success("Datos exportados a Excel exitosamente")
-            except Exception as e:
-                st.error(f"Error al exportar a Excel: {str(e)}")
-            finally:
-                if os.path.exists(tmp_file.name):
-                    os.unlink(tmp_file.name)
-        
-        # Exportar a PDF
-        if st.sidebar.button("Generar Informe PDF"):
-            try:
-                with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
-                    generate_pdf_report(filtered_df, tmp_file.name)
-                    with open(tmp_file.name, 'rb') as f:
-                        st.sidebar.download_button(
-                            label="Descargar PDF",
-                            data=f,
-                            file_name="informe_articulos.pdf",
-                            mime="application/pdf"
-                        )
-                st.success("Informe PDF generado exitosamente")
-            except Exception as e:
-                st.error(f"Error al generar el PDF: {str(e)}")
-            finally:
-                if os.path.exists(tmp_file.name):
-                    os.unlink(tmp_file.name)
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("Exportar datos")
+    
+    # Exportar a CSV
+    if st.sidebar.button("Exportar a CSV"):
+        tmp_file_path = None
+        try:
+            # Create a temporary file
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.csv') as tmp_file:
+                tmp_file_path = tmp_file.name
+                filtered_df.to_csv(tmp_file_path, index=False)
+            
+            # Create download button
+            with open(tmp_file_path, 'rb') as f:
+                st.sidebar.download_button(
+                    label="Descargar CSV",
+                    data=f,
+                    file_name="articulos_discover.csv",
+                    mime="text/csv"
+                )
+            st.success("Datos exportados a CSV exitosamente")
+        except Exception as e:
+            error_msg = f"Error al exportar a CSV: {e}"
+            st.error(error_msg)
+            logger.error(error_msg, exc_info=True)
+        finally:
+            # Clean up the temporary file if it was created
+            if tmp_file_path and os.path.exists(tmp_file_path):
+                try:
+                    os.unlink(tmp_file_path)
+                except Exception as e:
+                    logger.error(f"Error al limpiar archivo temporal: {e}", exc_info=True)
+
+    # Exportar a Excel
+    if st.sidebar.button("Exportar a Excel"):
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp_file:
+                filtered_df.to_excel(tmp_file.name, index=False, engine='openpyxl')
+                with open(tmp_file.name, 'rb') as f:
+                    st.sidebar.download_button(
+                        label="Descargar Excel",
+                        data=f,
+                        file_name="articulos_discover.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+            st.success("Datos exportados a Excel exitosamente")
+        except Exception as e:
+            st.error(f"Error al exportar a Excel: {e}")
+            logger.error(f"Error al exportar a Excel: {e}")
+        finally:
+            if os.path.exists(tmp_file.name):
+                os.unlink(tmp_file.name)
+
+    # Exportar a PDF
+    if st.sidebar.button("Generar Informe PDF"):
+        tmp_file = None
+        try:
+            tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.pdf')
+            tmp_file.close()  # Close the file so generate_pdf_report can write to it
+            generate_pdf_report(filtered_df, tmp_file.name)
+            
+            with open(tmp_file.name, 'rb') as f:
+                st.sidebar.download_button(
+                    label="Descargar PDF",
+                    data=f,
+                    file_name="informe_articulos.pdf",
+                    mime="application/pdf"
+                )
+            st.success("Informe PDF generado exitosamente")
+        except Exception as e:
+            st.error(f"Error al generar el PDF: {e}")
+            logger.error(f"Error al generar el PDF: {e}", exc_info=True)
+        finally:
+            if tmp_file and os.path.exists(tmp_file.name):
+                os.unlink(tmp_file.name)
 
 def main() -> None:
     """Función principal de la aplicación Streamlit."""
-    # Configuración de la página
-    st.set_page_config(
-        page_title="Monitor de Descubrimiento",
-        page_icon="📊",
-        layout="wide",
-        initial_sidebar_state="expanded"
-    )
-    
-    # Título de la aplicación
-    st.title("📊 Monitor de Contenidos en Discover")
-    st.markdown("---")
-    
-    # Inicializar el estado de la sesión para los datos
-    if 'df' not in st.session_state:
-        st.session_state.df = pd.DataFrame()
-    
-    # Cargar datos iniciales si no hay datos en la sesión
-    if st.session_state.df.empty:
-        st.session_state.df = load_data()
-    
-    # Obtener los datos
-    df = get_data()
-    
-    # Configurar la barra lateral
-    filters = setup_sidebar_filters(df) if not df.empty else {}
-    
-    # Aplicar filtros
-    filtered_df = apply_filters(df, filters) if not df.empty else pd.DataFrame()
-    
-    # Mostrar métricas
-    display_metrics(filtered_df)
-    
-    # Mostrar gráficos
-    display_charts(filtered_df)
-    
-    # Mostrar tabla
-    display_table(filtered_df)
-    
-    # Mostrar controles de exportación
-    export_data(filtered_df)
-    
-    # Mostrar mensaje si no hay datos
-    if df.empty:
-        st.info("No se encontraron datos. Ejecuta el script de scraping primero para generar datos.")
-        if st.button("Ejecutar Scraper"):
-            with st.spinner("Ejecutando scraper..."):
-                try:
-                    # Aquí iría la lógica para ejecutar el scraper
-                    st.success("¡Datos actualizados correctamente!")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Error al ejecutar el scraper: {e}")
+    try:
+        # Configuración de la página
+        st.set_page_config(
+            page_title="Monitor de Descubrimiento",
+            page_icon="📊",
+            layout="wide",
+            initial_sidebar_state="expanded"
+        )
+        
+        # Título de la aplicación
+        st.title("📊 Monitor de Contenidos en Discover")
+        st.markdown("---")
+        
+        # Inicializar el estado de la sesión para los datos
+        if 'df' not in st.session_state:
+            st.session_state.df = pd.DataFrame()
+        
+        # Cargar datos iniciales si no hay datos en la sesión
+        if st.session_state.df.empty:
+            st.session_state.df = load_data()
+        
+        # Obtener los datos
+        df = get_data()
+        
+        # Configurar la barra lateral con manejo de errores
+        try:
+            filters = setup_sidebar_filters(df) if not df.empty else {}
+        except Exception as e:
+            st.error(f"Error al configurar los filtros: {str(e)}")
+            logger.error(f"Error en setup_sidebar_filters: {str(e)}", exc_info=True)
+            filters = {}
+        
+        # Aplicar filtros
+        filtered_df = apply_filters(df, filters) if not df.empty else pd.DataFrame()
+        
+        # Mostrar métricas
+        display_metrics(filtered_df)
+        
+        # Mostrar gráficos
+        display_charts(filtered_df)
+        
+        # Mostrar tabla
+        display_table(filtered_df)
+        
+        # Mostrar controles de exportación
+        export_data(filtered_df)
+        
+        # Mostrar mensaje si no hay datos
+        if df.empty:
+            st.info("No se encontraron datos. Ejecuta el script de scraping primero para generar datos.")
+            if st.button("Ejecutar Scraper"):
+                with st.spinner("Ejecutando scraper..."):
+                    try:
+                        # Aquí iría la lógica para ejecutar el scraper
+                        st.success("¡Datos actualizados correctamente!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error al ejecutar el scraper: {str(e)}")
+                        logger.error(f"Error al ejecutar el scraper: {str(e)}", exc_info=True)
+    except Exception as e:
+        st.error(f"Se produjo un error inesperado: {str(e)}")
+        logger.error(f"Error inesperado en la aplicación: {str(e)}", exc_info=True)
 
 if __name__ == "__main__":
     main()

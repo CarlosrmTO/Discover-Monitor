@@ -1,15 +1,49 @@
 """Additional tests to improve coverage for app.py."""
 import os
+import sys
 import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch, mock_open
 
+# Add the parent directory to the path so we can import the app module
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 import pandas as pd
 import pytest
 import streamlit as st
 
-from app import (
+from discover_monitor.app import (
+    load_data,
+    get_data,
+    generate_source_chart,
+    generate_section_chart,
+    generate_pdf_report,
+    apply_filters,
+    setup_sidebar_filters,
+    export_data,
+    display_metrics,
+    display_charts,
+    display_table,
+    main
+)
+
+# Fixtures
+
+@pytest.fixture
+def sample_data():
+    """Create sample data for testing."""
+    return pd.DataFrame({
+        'title': ['Test Article 1', 'Test Article 2'],
+        'source': ['Source A', 'Source B'],
+        'section': ['News', 'Sports'],
+        'published_date': [pd.Timestamp('2023-01-01'), pd.Timestamp('2023-01-02')],
+        'url': ['http://example.com/1', 'http://example.com/2'],
+        'description': ['Test description 1', 'Test description 2']
+    })
+import streamlit as st
+
+from discover_monitor.app import (
     load_data,
     get_data,
     generate_source_chart,
@@ -108,28 +142,45 @@ def test_export_data_empty_data():
 
 def test_main_error_handling(monkeypatch):
     """Test main function error handling."""
-    # Mock the streamlit functions
+    # Mock the get_data function to raise an exception
+    def mock_get_data():
+        raise Exception("Test error")
+        
+    # Mock Streamlit components
     mock_st = MagicMock()
-    monkeypatch.setattr('app.st', mock_st)
+    mock_st.sidebar = MagicMock()
+    mock_st.error = MagicMock()
+    mock_st.session_state = {}
     
-    # Mock session state
-    mock_session_state = MagicMock()
-    mock_session_state.df = pd.DataFrame()  # Empty DataFrame to trigger load_data
-    mock_st.session_state = mock_session_state
+    # Apply mocks
+    monkeypatch.setattr('discover_monitor.app.get_data', mock_get_data)
+    monkeypatch.setattr('discover_monitor.app.st', mock_st)
     
-    # Mock load_data to raise an exception
-    mock_load_data = MagicMock(side_effect=Exception("Test error"))
-    monkeypatch.setattr('app.load_data', mock_load_data)
+    # Import and call main
+    from discover_monitor.app import main
+    main()
     
-    # Call the main function
-    with pytest.raises(Exception) as exc_info:
-        main()
+    # Verify error handling
+    mock_st.error.assert_called_once()
     
-    # Verify the error was raised
-    assert "Test error" in str(exc_info.value)
+    # Test with valid data but filter error
+    def mock_get_valid_data():
+        return pd.DataFrame({
+            'title': ['Test'],
+            'source': ['Test'],
+            'section': ['Test'],
+            'published_date': [pd.Timestamp('2023-01-01')],
+            'url': ['http://example.com']
+        })
     
-    # Verify load_data was called
-    mock_load_data.assert_called_once()
+    def mock_setup_sidebar_filters(df):
+        raise Exception("Filter error")
+    
+    monkeypatch.setattr('discover_monitor.app.get_data', mock_get_valid_data)
+    monkeypatch.setattr('discover_monitor.app.setup_sidebar_filters', mock_setup_sidebar_filters)
+    
+    main()
+    assert mock_st.error.call_count == 2  # Should have been called again for the filter error
 
 def test_generate_source_chart_empty_data():
     """Test generate_source_chart with empty DataFrame."""
@@ -145,62 +196,171 @@ def test_generate_section_chart_empty_data():
         generate_section_chart(empty_df)
         mock_chart.assert_not_called()
 
-@patch('app.FPDF')
+@patch('discover_monitor.app.FPDF')
 def test_generate_pdf_report_empty_data(mock_fpdf):
     """Test generate_pdf_report with empty DataFrame."""
-    empty_df = pd.DataFrame()
-    with tempfile.NamedTemporaryFile(delete=False) as temp_file:
-        try:
-            generate_pdf_report(empty_df, temp_file.name)
-            # Should not raise an exception
-            assert os.path.exists(temp_file.name)
-        finally:
-            if os.path.exists(temp_file.name):
-                os.unlink(temp_file.name)
+    with patch('discover_monitor.app.logger') as mock_logger:
+        # Test with empty DataFrame - should just return without creating PDF
+        generate_pdf_report(pd.DataFrame(), 'test.pdf')
+        mock_logger.warning.assert_called_once_with("No hay datos para generar el informe PDF")
+        mock_fpdf.assert_not_called()
+        
+        # Test with None output path - should raise ValueError
+        with pytest.raises(ValueError):
+            generate_pdf_report(pd.DataFrame({'title': ['Test']}), None)
+            
+        # Test with valid data but file write error
+        test_df = pd.DataFrame({
+            'title': ['Test Article'],
+            'source': ['Test Source'],
+            'section': ['Test Section'],
+            'published_date': [pd.Timestamp('2023-01-01')],
+            'url': ['http://example.com']
+        })
+        
+        # Configurar el mock de FPDF para que falle al guardar
+        mock_pdf_instance = MagicMock()
+        mock_fpdf.return_value = mock_pdf_instance
+        mock_pdf_instance.output.side_effect = IOError("Error al escribir")
+        
+        with pytest.raises(IOError) as exc_info:
+            generate_pdf_report(test_df, 'test.pdf')
+        
+        # Verificar que el mensaje de error sea el esperado
+        assert "Error al escribir" in str(exc_info.value)
+        
+        # Verificar que se llamó a logger.error
+        mock_logger.error.assert_called_once_with(
+            "Error al generar el informe PDF: Error al escribir",
+            exc_info=True
+        )
 
-def test_export_data_error_handling():
-    """Test error handling in export_data function."""
-    # Create a test DataFrame with proper datetime objects
+def test_export_data_empty_warning():
+    """Test that export_data shows warning when DataFrame is empty."""
+    with patch('discover_monitor.app.st.sidebar.warning') as mock_warning:
+        export_data(pd.DataFrame())
+        mock_warning.assert_called_once_with("No hay datos para exportar")
+
+def test_export_data_csv_error():
+    """Test error handling when CSV export fails."""
+    # Setup test data
     test_df = pd.DataFrame({
         'title': ['Test Article'],
         'source': ['Test Source'],
         'section': ['Test Section'],
-        'published_date': [datetime.now()],
-        'url': ['https://example.com'],
-        'description': ['Test Description']
+        'published_date': [pd.Timestamp('2023-01-01')],
+        'url': ['http://example.com']
     })
     
-    # Test Excel export error
-    with patch('app.st.sidebar') as mock_sidebar, \
-         patch('pandas.DataFrame.to_excel', side_effect=Exception("Test error")), \
-         patch('app.st.error') as mock_error, \
-         patch('app.os.path.exists', return_value=True), \
-         patch('app.os.unlink'):
-        mock_sidebar.button.side_effect = lambda label, **kwargs: label == "Exportar a Excel"
+    # Setup mocks
+    with patch('discover_monitor.app.st.sidebar') as mock_sidebar, \
+         patch('discover_monitor.app.st.error') as mock_error, \
+         patch('discover_monitor.app.logger') as mock_logger, \
+         patch('discover_monitor.app.tempfile.NamedTemporaryFile') as mock_tempfile, \
+         patch('pandas.DataFrame.to_csv') as mock_to_csv, \
+         patch('os.path.exists', return_value=True), \
+         patch('os.unlink') as mock_unlink:
+        
+        # Configure mocks
+        mock_sidebar.button.side_effect = lambda label, **kwargs: label == "Exportar a CSV"
+        mock_file = MagicMock()
+        mock_file.name = '/tmp/tempfile.csv'
+        mock_tempfile.return_value.__enter__.return_value = mock_file
+        mock_to_csv.side_effect = Exception("CSV error")
+        
+        # Call the function
         export_data(test_df)
-        mock_error.assert_called_with("Error al exportar a Excel: Test error")
+        
+        # Verify error handling
+        mock_error.assert_called_once()
+        assert "Error al exportar a CSV" in mock_error.call_args[0][0]
+        mock_logger.error.assert_called_once()
+        assert "CSV error" in str(mock_logger.error.call_args[0][0])
+        mock_unlink.assert_called_once_with('/tmp/tempfile.csv')
+
+def test_export_data_excel_error():
+    """Test error handling when Excel export fails."""
+    # Setup test data
+    test_df = pd.DataFrame({
+        'title': ['Test Article'],
+        'source': ['Test Source'],
+        'section': ['Test Section'],
+        'published_date': [pd.Timestamp('2023-01-01')],
+        'url': ['http://example.com']
+    })
     
-    # Test PDF export error - first mock the FPDF class
-    with patch('app.st.sidebar') as mock_sidebar, \
-         patch('app.st.error') as mock_error, \
-         patch('app.os.path.exists', return_value=True), \
-         patch('app.os.unlink'):
+    # Setup mocks
+    with patch('discover_monitor.app.st.sidebar') as mock_sidebar, \
+         patch('discover_monitor.app.st.error') as mock_error, \
+         patch('discover_monitor.app.logger') as mock_logger, \
+         patch('discover_monitor.app.tempfile.NamedTemporaryFile') as mock_tempfile, \
+         patch('pandas.DataFrame.to_excel') as mock_to_excel, \
+         patch('os.path.exists', return_value=True), \
+         patch('os.unlink') as mock_unlink:
         
-        # Create a side effect that will raise an exception when output is called
-        def raise_error(*args, **kwargs):
-            raise Exception("Test error")
-            
-        # Mock the FPDF class and its methods
-        mock_fpdf = MagicMock()
-        mock_fpdf_instance = MagicMock()
-        mock_fpdf.return_value = mock_fpdf_instance
-        mock_fpdf_instance.output.side_effect = raise_error
+        # Configure mocks
+        mock_sidebar.button.side_effect = lambda label, **kwargs: label == "Exportar a Excel"
+        mock_file = MagicMock()
+        mock_file.name = '/tmp/tempfile.xlsx'
+        mock_tempfile.return_value.__enter__.return_value = mock_file
+        mock_to_excel.side_effect = Exception("Excel error")
         
-        # Patch the FPDF class
-        with patch('app.FPDF', mock_fpdf):
-            mock_sidebar.button.side_effect = lambda label, **kwargs: label == "Generar Informe PDF"
-            export_data(test_df)
-            
-            # The actual error message includes the exception details
-            assert mock_error.called
-            assert "Error al generar el PDF" in mock_error.call_args[0][0]
+        # Call the function
+        export_data(test_df)
+        
+        # Verify error handling
+        mock_error.assert_called_once()
+        assert "Error al exportar a Excel" in mock_error.call_args[0][0]
+        mock_logger.error.assert_called_once()
+        assert "Excel error" in str(mock_logger.error.call_args[0][0])
+        mock_unlink.assert_called_once_with('/tmp/tempfile.xlsx')
+
+def test_export_data_pdf_error():
+    """Test error handling when PDF generation fails."""
+    # Setup test data
+    test_df = pd.DataFrame({
+        'title': ['Test Article'],
+        'source': ['Test Source'],
+        'section': ['Test Section'],
+        'published_date': [pd.Timestamp('2023-01-01')],
+        'url': ['http://example.com']
+    })
+    
+    # Setup mocks
+    with patch('discover_monitor.app.st.sidebar') as mock_sidebar, \
+         patch('discover_monitor.app.st.error') as mock_error, \
+         patch('discover_monitor.app.logger') as mock_logger, \
+         patch('discover_monitor.app.tempfile.NamedTemporaryFile') as mock_tempfile, \
+         patch('discover_monitor.app.generate_pdf_report') as mock_generate_pdf, \
+         patch('os.path.exists', return_value=True), \
+         patch('os.unlink') as mock_unlink:
+        
+        # Configure mocks
+        mock_sidebar.button.side_effect = lambda label, **kwargs: label == "Generar Informe PDF"
+        
+        # Create a proper mock for the file object
+        mock_file = MagicMock()
+        mock_file.name = '/tmp/tempfile.pdf'
+        
+        # Set up the context manager to return our mock file
+        mock_temp_instance = MagicMock()
+        mock_temp_instance.__enter__.return_value = mock_file
+        # Make sure name attribute is accessible on the instance
+        mock_temp_instance.name = '/tmp/tempfile.pdf'
+        mock_tempfile.return_value = mock_temp_instance
+        
+        # Simulate PDF generation error
+        mock_generate_pdf.side_effect = Exception("PDF generation error")
+        
+        # Call the function
+        export_data(test_df)
+        
+        # Verify error handling
+        mock_error.assert_called_once()
+        assert "Error al generar el PDF" in mock_error.call_args[0][0]
+        mock_logger.error.assert_called_once()
+        assert "PDF generation error" in str(mock_logger.error.call_args[0][0])
+        
+        # Verify unlink was called with the temporary file's name
+        # The function calls unlink with tmp_file.name, which is the mock_temp_instance.name
+        mock_unlink.assert_called_once_with('/tmp/tempfile.pdf')
